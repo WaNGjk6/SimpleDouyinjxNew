@@ -1,6 +1,6 @@
 {
   "versionCode": 4,
-  "versionName": "v2.2.4",
+  "versionName": "2.2.4",
   "updateLog": "1. 优化了音乐解析页面字体和排版\n2. 新增了日志AI分析\n3. 優化下載速度",
   "downloadUrlGlobal": "https://github.com/WaNGjk6/SimpleDouyinjxNew/releases/download/v2.2.4/v2.2.4-android-x64.apk",
   "downloadUrlChina": "https://gitee.com/jikai666/simple-douyinjx-new/releases/download/v2.2.4/v2.2.4-android-x64.apk",
