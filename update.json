@@ -1,7 +1,8 @@
 {
-  "versionCode": 3,
-  "versionName": "2.2.3",
+  "versionCode": 4,
+  "versionName": "v2.2.4",
   "updateLog": "1. 优化了音乐解析页面字体和排版\n2. 新增了日志AI分析\n3. 優化下載速度",
-  "downloadUrl": "https://github.com/WaNGjk6/SimpleDouyinjxNew/releases/download/Version-Update/FullPag.apk", 
+  "downloadUrlGlobal": "https://github.com/WaNGjk6/SimpleDouyinjxNew/releases/download/v2.2.4/v2.2.4-android-x64.apk",
+  "downloadUrlChina": "https://developer2.lanrar.com/file/?UDZXaVloDj9RWAE5AzZTP1doBj4HLgAwACkGMgFzUGVVeAI0ADMOPlVxVG0EOQVgViEPclc+VmBVfAZhUX0Ba1B2V2ZZbQ42UWIBCAM+UzZXMAYxB2AANAAxBjIBa1BkVWECZAB7DjxVcFQ/BGIFPFY8DzpXOVZgVWEGOVErAXBQIFc9WTYOalE1AWEDeFNiVzgGLAdpADUAKAY5AW9QN1VhAmQAOQ5oVTRUMgRjBTBWNQ9rVzFWZlUxBmNRbgFlUDRXNlllDm5RZAE0A2BTZ1drBjYHbAAwAD8GLgE8UCFVPgJzACgOKVVmVHAEOQVgVjEPOFcwVm1VZQY2UTsBOVB2V3RZbQ43UWIBMQNqU2NXOgY0B2AAOwAzBjkBalBiVWUCewBzDnxVZVRuBCcFOVY8DyxXfVYkVSUGPVE8ATdQZ1c4WT0OblE/AWEDZ1NgVysGdgcxAHIAOgYxAW9QYlV7AmAAbg50VTFUNwRhBSpWOw8+VyZWclU2Bm9RegFuUA9XY1lvDmdRNwF5A3FTJld0BnMHPQBdAHIGYQFgUGE=",
   "forceUpdate": false
 }
