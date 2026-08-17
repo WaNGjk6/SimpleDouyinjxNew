@@ -2,6 +2,7 @@ package top.jk666.douyinjiexi.ui.component
 
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -47,7 +48,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +95,45 @@ fun MediaResultCard(
     isDownloading: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    // 封面点击预览：视频 → 播放器；图集/实况 → 全屏查看
+    var coverPreviewVideo by remember { mutableStateOf(false) }
+    var coverPreviewImages by remember { mutableStateOf<Int?>(null) }
+
+    fun copyLink() {
+        val link = when {
+            !result.videoUrl.isNullOrBlank() -> result.videoUrl
+            result.images.isNotEmpty() -> result.images.firstOrNull()
+            result.livePhotos.isNotEmpty() -> result.livePhotos.firstOrNull()?.imageUrl
+            else -> null
+        }
+        if (link != null) {
+            clipboardManager.setText(AnnotatedString(link))
+            Toast.makeText(context, "链接已复制", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "暂无链接可复制", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun copyText() {
+        val sb = StringBuilder()
+        if (result.title.isNotBlank()) sb.appendLine("标题：${result.title}")
+        if (result.author.nickname.isNotBlank() && result.author.nickname != "未知作者") {
+            sb.appendLine("作者：${result.author.nickname}")
+        }
+        result.statistics?.let { s ->
+            if (s.playCount > 0) sb.appendLine("播放：${formatNum(s.playCount)}")
+            if (s.diggCount > 0) sb.appendLine("点赞：${formatNum(s.diggCount)}")
+            if (s.commentCount > 0) sb.appendLine("评论：${formatNum(s.commentCount)}")
+            if (s.shareCount > 0) sb.appendLine("分享：${formatNum(s.shareCount)}")
+            if (s.collectCount > 0) sb.appendLine("收藏：${formatNum(s.collectCount)}")
+        }
+        val text = sb.toString().trimEnd()
+        clipboardManager.setText(AnnotatedString(text.ifEmpty { "暂无文案可复制" }))
+        Toast.makeText(context, "文案已复制", Toast.LENGTH_SHORT).show()
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -112,7 +154,13 @@ fun MediaResultCard(
                     title = result.title,
                     author = result.author,
                     isPlayable = result.videoUrl != null,
-                    onClick = { }
+                    onClick = {
+                        when {
+                            !result.videoUrl.isNullOrBlank() -> coverPreviewVideo = true
+                            result.images.isNotEmpty() -> coverPreviewImages = 0
+                            result.livePhotos.isNotEmpty() -> coverPreviewImages = 0
+                        }
+                    }
                 )
             }
 
@@ -133,8 +181,8 @@ fun MediaResultCard(
                             isVideo = false,
                             isDownloading = isDownloading,
                             onPrimary = onDownloadAllImages,
-                            onSecondary = { },
-                            onTertiary = { }
+                            onSecondary = ::copyLink,
+                            onTertiary = ::copyText
                         )
                     }
                     contentType == "ALBUM" || result.images.isNotEmpty() -> {
@@ -142,8 +190,8 @@ fun MediaResultCard(
                             isVideo = false,
                             isDownloading = false,
                             onPrimary = onDownloadAllImages,
-                            onSecondary = { },
-                            onTertiary = { }
+                            onSecondary = ::copyLink,
+                            onTertiary = ::copyText
                         )
                     }
                     result.videoUrl != null -> {
@@ -151,8 +199,8 @@ fun MediaResultCard(
                             isVideo = true,
                             isDownloading = isDownloading,
                             onPrimary = onDownloadVideo,
-                            onSecondary = { },
-                            onTertiary = { }
+                            onSecondary = ::copyLink,
+                            onTertiary = ::copyText
                         )
                     }
                 }
@@ -182,6 +230,25 @@ fun MediaResultCard(
                     )
                 }
             }
+        }
+    }
+
+    // 封面点击触发的预览
+    if (coverPreviewVideo && !result.videoUrl.isNullOrBlank()) {
+        VideoPlayerDialog(
+            videoUrl = result.videoUrl!!,
+            onDismiss = { coverPreviewVideo = false }
+        )
+    }
+    if (coverPreviewImages != null) {
+        val previewImages = result.images.ifEmpty { result.livePhotos.map { it.imageUrl } }
+        if (previewImages.isNotEmpty()) {
+            FullScreenImageViewer(
+                images = previewImages,
+                initialPage = coverPreviewImages!!,
+                onDismiss = { coverPreviewImages = null },
+                onDownload = { url, _ -> onDownloadImage(url) }
+            )
         }
     }
 }
