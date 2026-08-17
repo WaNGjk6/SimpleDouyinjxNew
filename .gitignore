@@ -1,0 +1,24 @@
+# ===== 构建产物 =====
+build/
+*/build/
+.gradle/
+/captures
+.externalNativeBuild
+.cxx
+
+# ===== 本地配置（含本机绝对路径，勿提交） =====
+local.properties
+*.jks
+*.keystore
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+.trae/
+.kotlin/
+*.iml
+.DS_Store
+
+# ===== 本地文档 / AI 提示词（勿提交） =====
+/小红书要求1.txt
+/最新要求3.txt
