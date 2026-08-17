@@ -36,7 +36,7 @@
 - Media3 ExoPlayer（视频播放）
 - Coil（图片加载）
 - DataStore（设置持久化）
-- AGP 9.x，minSdk 24，targetSdk 36
+- AGP 8.13.2 + Gradle 8.14.5，minSdk 24，targetSdk 36
 
 ## 🔨 构建
 

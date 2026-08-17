@@ -16,11 +16,8 @@ val localProps = Properties().apply {
 
 android {
     namespace = "top.jk666.douyinjiexi"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    // AGP 8.x 语法（AGP 9 的 compileSdk{ version = release(...) } DSL 不适用于 8.x）
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "top.jk666.douyinjiexi"
