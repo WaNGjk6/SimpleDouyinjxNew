@@ -1,8 +1,12 @@
 package top.jk666.douyinjiexi.api
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -13,6 +17,7 @@ import okhttp3.Request
 import top.jk666.douyinjiexi.util.AppLogger
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
@@ -141,12 +146,35 @@ object UpdateManager {
         return targetUrl
     }
 
+    // 下载到「公共下载目录 Download/」（卸载应用后文件仍在），否则 APK 落在应用私有缓存、卸载即被清掉、
+    // 用户卸载后就找不到安装包。Android 10+ 用 MediaStore(免权限)，更老用文件路径(需 WRITE_EXTERNAL_STORAGE)。
+    private fun resolveUpdateApkStream(context: Context, fileName: String): Pair<OutputStream, File> {
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)!!
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("无法在公共下载目录创建条目")
+            val out = context.contentResolver.openOutputStream(uri) ?: throw Exception("无法打开下载输出流")
+            // MediaStore 落盘路径通常就是 /storage/emulated/0/Download/<fileName>，供 FileProvider 安装使用
+            return out to File(downloadsDir, fileName)
+        } else {
+            if (!downloadsDir.exists()) downloadsDir.mkdirs()
+            val file = File(downloadsDir, fileName)
+            return FileOutputStream(file) to file
+        }
+    }
+
     suspend fun downloadApk(
         url: String,
         context: Context,
+        fileName: String,
         onProgress: (Int) -> Unit
     ): File? = withContext(Dispatchers.IO) {
-        AppLogger.d(TAG, "===== 开始下载APK =====")
+        AppLogger.d(TAG, "===== 开始下载APK(保存到公共下载目录) =====")
         AppLogger.d(TAG, "下载URL: $url")
         try {
             val request = Request.Builder()
@@ -162,30 +190,19 @@ object UpdateManager {
                 return@withContext null
             }
             val body = response.body
-            if (body == null) {
-                AppLogger.e(TAG, "下载响应体为空")
-                return@withContext null
-            }
+                ?: run { AppLogger.e(TAG, "下载响应体为空"); return@withContext null }
             val contentLength = body.contentLength()
             AppLogger.d(TAG, "文件大小: ${contentLength / 1024 / 1024}MB")
-            val cacheDir = context.externalCacheDir
-            if (cacheDir == null) {
-                AppLogger.e(TAG, "外部缓存目录不可用")
-                return@withContext null
-            }
-            if (!cacheDir.exists()) {
-                cacheDir.mkdirs()
-            }
-            val apkFile = File(cacheDir, "update.apk")
-            AppLogger.d(TAG, "保存路径: ${apkFile.absolutePath}")
-            body.byteStream().use { inputStream ->
-                FileOutputStream(apkFile).use { outputStream ->
+            val (outputStream, targetFile) = resolveUpdateApkStream(context, fileName)
+            AppLogger.d(TAG, "保存到公共下载目录: ${targetFile.absolutePath}")
+            outputStream.use { outer ->
+                body.byteStream().use { inputStream ->
                     val buffer = ByteArray(8192)
                     var bytesRead: Int
                     var totalBytesRead = 0L
                     var lastProgress = 0
                     while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        outputStream.write(buffer, 0, bytesRead)
+                        outer.write(buffer, 0, bytesRead)
                         totalBytesRead += bytesRead
                         if (contentLength > 0) {
                             val progress = (totalBytesRead * 100 / contentLength).toInt()
@@ -198,11 +215,11 @@ object UpdateManager {
                             }
                         }
                     }
-                    outputStream.flush()
+                    outer.flush()
                 }
             }
-            AppLogger.d(TAG, "APK下载完成: ${apkFile.length() / 1024 / 1024}MB")
-            return@withContext apkFile
+            AppLogger.d(TAG, "APK下载完成: ${targetFile.length() / 1024 / 1024}MB")
+            return@withContext targetFile
         } catch (e: Exception) {
             AppLogger.e(TAG, "APK下载异常: ${e.javaClass.simpleName}: ${e.message}", e)
             return@withContext null

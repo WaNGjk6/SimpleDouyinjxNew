@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.jk666.douyinjiexi.api.AiAnalyzer
 import top.jk666.douyinjiexi.util.AppLogger
@@ -55,6 +56,18 @@ fun SettingsScreen() {
     var isAiAnalyzing by remember { mutableStateOf(false) }
 
     val allDisabled = apiEnabledList.all { !it }
+
+    // AI 分析等待倒计时（从 30s 递减），让用户知道在正常分析，不会误以为卡住直接关闭
+    var aiCountdown by remember { mutableIntStateOf(30) }
+    LaunchedEffect(isAiAnalyzing) {
+        if (isAiAnalyzing) {
+            aiCountdown = 30
+            while (aiCountdown > 0) {
+                delay(1000)
+                aiCountdown--
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -109,7 +122,7 @@ fun SettingsScreen() {
         }
 
         Text(
-            text = "抖音解析接口",
+            text = "解析接口",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary
@@ -347,13 +360,16 @@ fun SettingsScreen() {
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                val versionName = runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                }.getOrNull() ?: "未知"
                 val aboutItems = listOf(
                     "应用名称" to "聚合解析",
-                    "版本" to "2.2.6",
-                    "技术栈" to "Jetpack Compose + Material3",
-                    "支持平台" to "抖音 / 快手 / 小红书 / 豆包无水印",
+                    "版本" to versionName,
+                    "技术栈" to "Kotlin + Jetpack Compose + Material3",
+                    "支持平台" to "抖音、快手、小红书、B站等",
                     "音乐平台" to "QQ音乐 / 网易云音乐",
-                    "内核" to "多接口智能容灾 Fallback"
+                    "内核" to "多源聚合 · 智能容灾"
                 )
                 aboutItems.forEachIndexed { index, (label, value) ->
                     Row(
@@ -518,7 +534,7 @@ fun SettingsScreen() {
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("AI 分析中...")
+                            Text("AI 分析中 ${aiCountdown}s")
                         } else {
                             Text("🤖 开始 AI 分析")
                         }

@@ -134,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     PlatformType.KUAISHOU -> DouyinApi.parseKuaishou(extractedUrl)
                     PlatformType.XHS -> DouyinApi.parseXhs(extractedUrl)
                     PlatformType.DOUBAO -> DouyinApi.parseDoubao(extractedUrl)
+                    PlatformType.OTHER_MEDIA -> DouyinApi.parseOtherMedia(extractedUrl)
                     else -> throw Exception("不支持的平台")
                 }
                 _parseResult.value = result
@@ -255,6 +256,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val apkFile = UpdateManager.downloadApk(
                     url = smartUrl,
                     context = getApplication(),
+                    fileName = "聚合解析-${info.versionName}.apk",
                     onProgress = { progress ->
                         _updateProgress.value = progress
                     }

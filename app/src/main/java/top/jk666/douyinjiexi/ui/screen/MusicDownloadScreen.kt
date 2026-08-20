@@ -20,11 +20,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.delay
 import top.jk666.douyinjiexi.model.MusicPlatform
 import top.jk666.douyinjiexi.ui.component.MusicResultCard
 import top.jk666.douyinjiexi.ui.component.MusicSearchList
@@ -150,12 +156,20 @@ fun MusicDownloadScreen(viewModel: MainViewModel, modifier: Modifier = Modifier)
                         .background(CardBg.copy(alpha = 0.85f))
                         .padding(16.dp)
                 ) {
-                    MusicResultCard(
-                        result = result,
-                        onDownload = viewModel::downloadMusic,
-                        isDownloading = isDownloading,
-                        selectedQuality = selectedQuality
-                    )
+                    Column {
+                        MusicResultCard(
+                            result = result,
+                            onDownload = viewModel::downloadMusic,
+                            isDownloading = isDownloading,
+                            selectedQuality = selectedQuality
+                        )
+                        result.url?.let { url ->
+                            Spacer(modifier = Modifier.height(12.dp))
+                            key(url) {
+                                MusicPlayerCard(url = url, title = result.name)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -554,4 +568,138 @@ private fun MusicDownloadDialog(downloadProgress: String?) {
         containerColor = CardBg.copy(alpha = 0.95f),
         shape = RoundedCornerShape(20.dp)
     )
+}
+
+// 在线播放器：复用 Media3 ExoPlayer，播放/暂停、停止、进度+时间。外部用 key(url) 包裹，切歌自动重建。
+@Composable
+private fun MusicPlayerCard(url: String, title: String) {
+    val context = LocalContext.current
+    val player = remember { ExoPlayer.Builder(context).build() }
+    var isPlaying by remember { mutableStateOf(false) }
+    var isPlayerReady by remember { mutableStateOf(false) }
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isPlayerReady = playbackState == Player.STATE_READY
+                duration = player.duration.coerceAtLeast(0)
+            }
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            position = player.currentPosition
+            duration = player.duration.coerceAtLeast(0)
+            delay(500)
+        }
+    }
+
+    fun togglePlay() {
+        if (!isPlayerReady) {
+            player.setMediaItem(MediaItem.fromUri(url))
+            player.prepare()
+            player.play()
+        } else if (isPlaying) {
+            player.pause()
+        } else {
+            player.play()
+        }
+    }
+
+    fun stopPlay() {
+        player.stop()
+        player.clearMediaItems()
+        position = 0
+        duration = 0
+    }
+
+    Surface(
+        color = DarkInput.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = "🎵", fontSize = 16.sp)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "在线试听",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { togglePlay() }) {
+                    Text(
+                        text = if (isPlaying) "⏸" else "▶",
+                        fontSize = 26.sp,
+                        color = CyberCyan
+                    )
+                }
+                IconButton(onClick = { stopPlay() }) {
+                    Text(
+                        text = "⏹",
+                        fontSize = 24.sp,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = formatDuration(position),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
+                Text(
+                    text = " / ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.4f)
+                )
+                Text(
+                    text = formatDuration(duration),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
+            }
+            if (duration > 0) {
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { (position.toFloat() / duration).coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = CyberCyan,
+                    trackColor = Color.White.copy(alpha = 0.1f)
+                )
+            }
+        }
+    }
+}
+
+private fun formatDuration(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    val min = s / 60
+    val sec = s % 60
+    return String.format("%d:%02d", min, sec)
 }

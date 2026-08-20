@@ -10,6 +10,7 @@ build/
 local.properties
 *.jks
 *.keystore
+/keystore/
 
 # ===== IDE / 编辑器 =====
 .idea/
@@ -23,3 +24,8 @@ local.properties
 # ===== 本地文档 / AI 提示词（勿提交） =====
 /小红书要求1.txt
 /最新要求3.txt
+/API文档/
+/模型配置.txt
+/修改Json内容/
+/update.json
+/update.json.dist

@@ -17,7 +17,7 @@ data class ParseResult(
 )
 
 enum class Platform {
-    DOUYIN, DOUBAO, KUAISHOU, XHS;
+    DOUYIN, DOUBAO, KUAISHOU, XHS, OTHER;
 
     val displayName: String
         get() = when (this) {
@@ -25,6 +25,7 @@ enum class Platform {
             DOUBAO -> "豆包"
             KUAISHOU -> "快手"
             XHS -> "小红书"
+            OTHER -> "其他"
         }
 
     val emoji: String
@@ -33,6 +34,7 @@ enum class Platform {
             DOUBAO -> "🤖"
             KUAISHOU -> "⚡"
             XHS -> "📕"
+            OTHER -> "📄"
         }
 }
 

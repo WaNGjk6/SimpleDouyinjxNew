@@ -679,7 +679,8 @@ private fun CyberUpdateDialog(
                             )
                             .padding(12.dp)
                     )
-                } else {
+
+                    } else {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,

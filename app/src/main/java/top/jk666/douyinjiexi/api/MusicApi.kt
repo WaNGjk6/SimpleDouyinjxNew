@@ -126,20 +126,20 @@ object MusicApi {
         AppLogger.d(TAG, "开始网易云音乐详情: songId=$songId, quality=$quality")
         val apiUrl = "https://api.bugpk.com/api/163_music?type=json&ids=${java.net.URLEncoder.encode(songId, "UTF-8")}&level=${java.net.URLEncoder.encode(quality, "UTF-8")}"
         val json = fetchJson(apiUrl, "网易云详情接口")
-        val data = json.safeGetObject("data") ?: throw Exception("返回数据格式错误")
-        AppLogger.d(TAG, "网易云详情 data 键: ${data.keySet().joinToString(", ")}")
+        // 实测：bugpk 的 type=json 详情是「平铺在顶层、无 data 包装」，状态字段为 status 而非 code
+        AppLogger.d(TAG, "网易云详情顶层键: ${json.keySet().joinToString(", ")}")
 
         val result = MusicResult(
-            name = data.safeGet("name") ?: "未知歌曲",
-            artist = data.safeGet("ar_name") ?: data.safeGet("artist") ?: "未知歌手",
-            cover = data.safeGet("pic") ?: data.safeGet("cover"),
-            url = data.safeGet("url"),
-            lyrics = data.safeGet("lyric") ?: data.safeGet("lrc_data"),
+            name = json.safeGet("name") ?: "未知歌曲",
+            artist = json.safeGet("ar_name") ?: json.safeGet("artist") ?: "未知歌手",
+            cover = json.safeGet("pic") ?: json.safeGet("cover"),
+            url = json.safeGet("url"),
+            lyrics = json.safeGet("lyric") ?: json.safeGet("lrc_data"),
             platform = MusicPlatform.NETEASE,
             songId = songId,
-            album = data.safeGet("al_name") ?: data.safeGet("album"),
-            quality = data.safeGet("level") ?: quality,
-            fileSize = data.safeGet("size")
+            album = json.safeGet("al_name") ?: json.safeGet("album"),
+            quality = json.safeGet("level") ?: quality,
+            fileSize = json.safeGet("size")
         )
         AppLogger.d(TAG, "网易云详情结果: name=${result.name}, artist=${result.artist}, url=${result.url != null}, quality=${result.quality}")
         result

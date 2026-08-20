@@ -15,10 +15,10 @@ import java.util.concurrent.TimeUnit
 object AiAnalyzer {
 
     private const val TAG = "AiAnalyzer"
-    private const val API_URL = "https://api.siliconflow.cn/v1/chat/completions"
-    // AI 接口 Key：从 local.properties 注入（见 build.gradle.kts），不硬编码入库
+    private const val API_URL = "https://newapi.jikai666.top/v1/chat/completions"
+    // AI 接口 Key：已随构建内置于 BuildConfig（见 build.gradle.kts）
     private val API_KEY: String get() = BuildConfig.AI_API_KEY
-    private const val MODEL_NAME = "Qwen/Qwen3-8B"
+    private const val MODEL_NAME = "THUDM/GLM-4-9B-0414"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)

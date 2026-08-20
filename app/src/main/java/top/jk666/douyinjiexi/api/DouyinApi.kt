@@ -20,6 +20,8 @@ object DouyinApi {
     private const val TAG = "DouyinApi"
     // 小红书解析接口 Key：从 local.properties 注入（见 build.gradle.kts），不硬编码入库
     private val XHS_API_KEY: String get() = BuildConfig.XHS_API_KEY
+    // BugPk 新系统(api-new.ifphp.com)高并发解析 Key；该网关无 Key(401)不入流，需携带
+    private val BUGPK_API_KEY: String get() = BuildConfig.BUGPK_API_KEY
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -112,7 +114,7 @@ object DouyinApi {
 
     private suspend fun expandShortUrl(originalUrl: String): String {
         val shortLinkPatterns = listOf(
-            "xhslink.com", "xiaohongshu.com/discovery",
+            "xhslink.com", "xhslink.cn", "xiaohongshu.com/discovery",
             "v.kuaishou.com", "v.kuaishou.com/",
             "v.douyin.com", "vm.tiktok.com",
             "c.tb.cn", "m.tb.cn",
@@ -228,6 +230,25 @@ object DouyinApi {
         return json
     }
 
+    // 候选URL管道降级：对支持"带Key/免Key两通道"的源，按 urls 顺序依次尝试，
+    // 任一成功即用；全部失败则抛出最后异常(源被记为失败、由上层切换到下一个源)。
+    // 实证：山海带Key额度更高、免Key也能用——故 [带KeyURL, 免KeyURL]；
+    //      BugPk新系统无Key直接401，故仅单候选。源挂在(如山海Redis故障)会自然整链失败→上层跳过。
+    private fun fetchJsonCandidate(urls: List<String>, apiName: String): JsonObject {
+        var lastErr: Exception = Exception("无可用请求地址")
+        for ((index, candidateUrl) in urls.withIndex()) {
+            val label = if (index == 0) apiName else "$apiName(免Key/备用通道)"
+            try {
+                AppLogger.d(TAG, "[$label] 尝试候选URL: $candidateUrl")
+                return fetchJson(candidateUrl, label)
+            } catch (e: Exception) {
+                lastErr = e
+                AppLogger.d(TAG, "[$label] 候选失败(${e.message})，尝试下一通道")
+            }
+        }
+        throw lastErr
+    }
+
     private fun logParseResult(apiName: String, result: ParseResult) {
         AppLogger.d(TAG, "解析结果 [$apiName] - " +
             "title: ${result.title.ifBlank { "空" }}, " +
@@ -243,13 +264,23 @@ object DouyinApi {
         AppLogger.d(TAG, "目标URL: $url")
         AppLogger.d(TAG, "API开关状态: ${apiEnabled.mapIndexed { i, enabled -> "方案${i+1}=${if (enabled) "开" else "关"}" }.joinToString(", ")}")
 
+        // 部分源(Star xhus)不认短链，统一先展开一次、仅供需要的源使用；bugpk 系直接吃原短链
+        val realUrl = expandShortUrl(url)
+        AppLogger.d(TAG, "短链展开结果(供Star等源使用): ${realUrl.take(80)} === ${if (realUrl != url) "已展开" else "未变化/展开失败"}")
+
         val allApis = listOf(
-            "PP视频解析" to { parseApi1(url) },
-            "柠檬解析" to { parseApi2(url) },
-            "初梦科技" to { parseApi3(url) },
-            "API Store" to { parseApi4(url) },
-            "新野API" to { parseApi5(url) },
-            "远梦API" to { parseApi6(url) }
+            // 实测确认：BugPk新系统(ifphp)无Key返回401，带Key(QPS10)为主力；结构兼容旧初梦可直接复用 parseDouyinResponse
+            "BugPk新系统(高并发)" to { parseApi1(url) },
+            // 山海(apibyte)实测当前 Redis 挂了；带Key优先、自动降到免Key。源恢复后自动启用
+            "山海云端" to { parseApi2(url) },
+            // 旧初梦 api.bugpk.com 免Key，QPS1 易限流，作兜底
+            "BugPk旧版" to { parseApi3(url) },
+            // 远梦真实域名 qzqi.com(文档)，免Key；旧代码误用了 api.mmp.cc 才一直格式错误
+            "远梦API" to { parseApi5(url) },
+            // Star xhus 免Key，但不认短链，需展开后的完整链接；实测视频给 data.url、图集给 imgurl
+            "Star解析" to { parseApi6(realUrl) },
+            // 创信 jxcxin 的 url 是二次代理链不可当直链，仅作元数据(作者/点赞)缝合源
+            "创信缝合" to { parseApi4(url) }
         )
 
         val apis = allApis.filterIndexed { index, _ ->
@@ -509,6 +540,21 @@ object DouyinApi {
             } else {
                 AppLogger.d(TAG, "[KS-003] URL未变化（非短链或展开失败）")
             }
+            // 主通道: BugPk新系统 svparse(带Key) 支持快手(文档)；成功即用，失败回退专用接口
+            try {
+                val svEnc = java.net.URLEncoder.encode(realUrl, "UTF-8")
+                val svUrl = "https://api-new.ifphp.com/api/svparse?key=$BUGPK_API_KEY&url=$svEnc"
+                AppLogger.d(TAG, "[KS-SV] 尝试 svparse(带Key): $svUrl")
+                val svJson = fetchJson(svUrl, "快手-svparse")
+                val svResult = parseDouyinResponse(svJson, realUrl).copy(platform = Platform.KUAISHOU)
+                if (!svResult.videoUrl.isNullOrBlank() || svResult.images.isNotEmpty()) {
+                    AppLogger.d(TAG, "[KS-SV] svparse 快手解析成功: type=${svResult.type}, video=${!svResult.videoUrl.isNullOrBlank()}, images=${svResult.images.size}")
+                    return@withContext svResult
+                }
+                AppLogger.d(TAG, "[KS-SV] svparse 未返回媒体数据，回退专用接口")
+            } catch (e: Exception) {
+                AppLogger.d(TAG, "[KS-SV] svparse 失败(${e.message})，回退专用接口")
+            }
             val encodedUrl = java.net.URLEncoder.encode(realUrl, "UTF-8")
             AppLogger.d(TAG, "[KS-004] URL编码后: $encodedUrl")
             val apiUrl1 = "https://api.bugpk.com/api/kuaishou?url=$encodedUrl&type=video"
@@ -549,26 +595,44 @@ object DouyinApi {
     }
 
     suspend fun parseXhs(url: String): ParseResult = withContext(Dispatchers.IO) {
-        AppLogger.d(TAG, "===== 开始小红书解析(新接口) =====")
-        AppLogger.d(TAG, "[XHS-NEW-001] 输入URL: $url")
+        AppLogger.d(TAG, "===== 开始小红书解析(多通道: svparse + xhsjx) =====")
         try {
             var submitUrl = url.trim().removeSurrounding("`")
             if (submitUrl.startsWith("http://", ignoreCase = true)) {
                 submitUrl = submitUrl.replaceFirst("http://", "https://")
-                AppLogger.d(TAG, "[XHS-NEW-002] HTTP升级为HTTPS: $submitUrl")
             }
-            AppLogger.d(TAG, "[XHS-NEW-003] 提交给接口的URL: $submitUrl")
-            val encodedUrl = java.net.URLEncoder.encode(submitUrl, "UTF-8")
-            AppLogger.d(TAG, "[XHS-NEW-004] URL编码后: $encodedUrl")
-            val apiUrl = "https://apione.apibyte.cn/xhsvideoparse?key=$XHS_API_KEY&url=$encodedUrl"
-            AppLogger.d(TAG, "[XHS-NEW-005] 新接口完整URL: $apiUrl")
-            val json = fetchJson(apiUrl, "小红书-新接口")
-            val jsonStr = json.toString()
-            AppLogger.d(TAG, "[XHS-NEW-006] 响应长度: ${jsonStr.length} 字符")
-            AppLogger.d(TAG, "[XHS-NEW-007] 响应前800字符: ${jsonStr.take(800)}")
-            val result = parseXhsNewResponse(json)
-            AppLogger.d(TAG, "[XHS-NEW-008] 解析结果: type=${result.type}, title=${result.title.take(20)}, images=${result.images.size}, videoUrl=${!result.videoUrl.isNullOrBlank()}, author=${result.author.nickname}")
-            result
+            AppLogger.d(TAG, "[XHS-001] 输入URL: $submitUrl")
+            // 统一展开短链(xhslink.cn/.com)；svparse 实测吃短链，xhsjx 偏好完整链接，两者都用展开后的最稳
+            val realUrl = expandShortUrl(submitUrl)
+            AppLogger.d(TAG, "[XHS-002] 展开后URL: ${realUrl.take(80)}")
+            val encShort = java.net.URLEncoder.encode(submitUrl, "UTF-8")
+            val encReal = java.net.URLEncoder.encode(realUrl, "UTF-8")
+            AppLogger.d(TAG, "[XHS-003] 短链encoded: ${encShort.take(60)}")
+
+            // 主通道: BugPk新系统 svparse(带Key)。实测：svparse 吃「原始短链」最稳(能解小红书视频/图集)，展开完整链仅兜底
+            try {
+                val svShort = "https://api-new.ifphp.com/api/svparse?key=$BUGPK_API_KEY&url=$encShort"
+                val svReal = "https://api-new.ifphp.com/api/svparse?key=$BUGPK_API_KEY&url=$encReal"
+                AppLogger.d(TAG, "[XHS-主] 请求 svparse 候选[短链优先]: $svShort")
+                val json = fetchJsonCandidate(listOf(svShort, svReal), "小红书-svparse")
+                val result = parseDouyinResponse(json, submitUrl)
+                if (!result.videoUrl.isNullOrBlank() || result.images.isNotEmpty()) {
+                    AppLogger.d(TAG, "[XHS-主] svparse 解析成功: type=${result.type}, video=${!result.videoUrl.isNullOrBlank()}, images=${result.images.size}")
+                    return@withContext result
+                }
+                AppLogger.d(TAG, "[XHS-主] svparse 未返回媒体数据，转入 xhsjx")
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "[XHS-主] svparse 失败(${e.message})，转入 xhsjx", e)
+            }
+
+            // 备用通道: Star xhus xhsjx(免Key) — 视频返 data.url、图集返 imgurl[]；实测完整链接更稳，短链兜底
+            val xhsReal = "https://api.xhus.cn/api/xhsjx?url=$encReal"
+            val xhsShort = "https://api.xhus.cn/api/xhsjx?url=$encShort"
+            AppLogger.d(TAG, "[XHS-备] 请求 xhsjx 候选[完整优先]: $xhsReal")
+            val json2 = fetchJsonCandidate(listOf(xhsReal, xhsShort), "小红书-xhsjx")
+            val result2 = parseXhsXhuResponse(json2, realUrl)
+            AppLogger.d(TAG, "[XHS-备] xhsjx 解析成功: type=${result2.type}, video=${!result2.videoUrl.isNullOrBlank()}, images=${result2.images.size}")
+            return@withContext result2
         } catch (e: Exception) {
             val reason = when (e) {
                 is SocketTimeoutException -> "请求超时"
@@ -577,10 +641,115 @@ object DouyinApi {
                 is javax.net.ssl.SSLException -> "SSL证书错误"
                 else -> "${e.javaClass.simpleName}: ${e.message}"
             }
-            AppLogger.e(TAG, "[XHS-NEW-ERR] 小红书解析异常: $reason")
-            AppLogger.e(TAG, "[XHS-NEW-ERR] 异常堆栈:", e)
+            AppLogger.e(TAG, "[XHS-ERR] 小红书解析异常: $reason")
             throw Exception("小红书解析失败: $reason")
         }
+    }
+
+    // 归一化 http:// -> https:// (xhus 返回的图片/视频常为 http，补 https 更稳)
+    private fun normalizeToHttps(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return if (url.startsWith("http://", ignoreCase = true)) "https://" + url.substring(7) else url
+    }
+
+    // Star xhus xhsjx 响应解析：视频笔记含 data.url(视频直链)；图集笔记含 data.imgurl[](图片列表)
+    private fun parseXhsXhuResponse(json: JsonObject, sourceUrl: String): ParseResult {
+        val data = json.safeGetObject("data") ?: throw Exception("返回数据格式错误")
+        AppLogger.d(TAG, "[XHS-xhsjx] data键: ${data.keySet().joinToString(", ")}")
+        val author = AuthorInfo(
+            nickname = data.safeGet("author") ?: "未知作者",
+            avatar = data.safeGet("avatar"),
+            uniqueId = data.safeGet("authorID")
+        )
+        val images = data.safeGetArray("imgurl")?.mapNotNull { it.safeString() }?.mapNotNull(::normalizeToHttps) ?: emptyList()
+        val videoUrl = normalizeToHttps(data.safeGet("url"))
+        val actualType = if (videoUrl != null) ContentType.VIDEO
+                         else if (images.isNotEmpty()) ContentType.ALBUM
+                         else ContentType.VIDEO
+        val finalVideo = if (actualType == ContentType.ALBUM) null else videoUrl
+        return ParseResult(
+            type = actualType,
+            title = data.safeGet("title") ?: data.safeGet("desc") ?: "",
+            desc = data.safeGet("desc"),
+            cover = data.safeGet("cover"),
+            author = author,
+            videoUrl = finalVideo,
+            videoUrls = if (videoUrl != null) listOf(videoUrl) else emptyList(),
+            images = images,
+            music = null,
+            statistics = null,
+            platform = Platform.XHS,
+            imageCount = images.size
+        )
+    }
+
+    // 多平台聚合解析：B站/西瓜/微视/A站等非抖音/快手/小红书/豆包的媒体平台。
+    // 主通道 BugPk新系统 svparse(带Key，platform 自动识别)，兜底 Star autopars(免Key)。
+    suspend fun parseOtherMedia(url: String): ParseResult = withContext(Dispatchers.IO) {
+        AppLogger.d(TAG, "===== 开始多平台聚合解析(svparse) =====")
+        try {
+            val enc = java.net.URLEncoder.encode(url, "UTF-8")
+            try {
+                val apiUrl = "https://api-new.ifphp.com/api/svparse?key=$BUGPK_API_KEY&url=$enc"
+                AppLogger.d(TAG, "[MEDIA-主] 请求 svparse(带Key): $apiUrl")
+                val json = fetchJson(apiUrl, "多平台-svparse")
+                val result = parseDouyinResponse(json, url)
+                if (!result.videoUrl.isNullOrBlank() || result.images.isNotEmpty() || result.livePhotos.isNotEmpty()) {
+                    AppLogger.d(TAG, "[MEDIA-主] svparse 解析成功: type=${result.type}, video=${!result.videoUrl.isNullOrBlank()}, images=${result.images.size}")
+                    return@withContext result.copy(platform = Platform.OTHER)
+                }
+                AppLogger.d(TAG, "[MEDIA-主] svparse 未返回媒体，转 autopars")
+            } catch (e: Exception) {
+                AppLogger.d(TAG, "[MEDIA-主] svparse 失败(${e.message})，转 autopars")
+            }
+            val autoUrl = "https://api.xhus.cn/api/autopars?url=$enc"
+            AppLogger.d(TAG, "[MEDIA-备] 请求 autopars(免Key): $autoUrl")
+            val json2 = fetchJson(autoUrl, "多平台-autopars")
+            val result2 = parseAutoparsResponse(json2, url)
+            AppLogger.d(TAG, "[MEDIA-备] autopars 解析成功: type=${result2.type}, video=${!result2.videoUrl.isNullOrBlank()}, images=${result2.images.size}")
+            return@withContext result2
+        } catch (e: Exception) {
+            val reason = when (e) {
+                is SocketTimeoutException -> "请求超时"
+                is UnknownHostException -> "网络不可达"
+                is java.net.ConnectException -> "连接失败"
+                is javax.net.ssl.SSLException -> "SSL证书错误"
+                else -> "${e.javaClass.simpleName}: ${e.message}"
+            }
+            AppLogger.e(TAG, "[MEDIA-ERR] 多平台解析异常: $reason")
+            throw Exception("多平台解析失败: $reason")
+        }
+    }
+
+    // Star autopars 聚合响应：data{title,type,cover,desc,url,images[],user{name,user_img}}
+    private fun parseAutoparsResponse(json: JsonObject, sourceUrl: String): ParseResult {
+        val data = json.safeGetObject("data") ?: throw Exception("返回数据格式错误")
+        val user = data.safeGetObject("user")
+        val author = AuthorInfo(
+            nickname = user?.safeGet("name") ?: data.safeGet("author") ?: "未知作者",
+            avatar = user?.safeGet("user_img") ?: data.safeGet("avatar"),
+            uniqueId = data.safeGet("userId") ?: user?.safeGet("uid")
+        )
+        val images = data.safeGetArray("images")?.mapNotNull { it.safeString() }?.mapNotNull(::normalizeToHttps) ?: emptyList()
+        val videoUrl = normalizeToHttps(data.safeGet("url"))
+        val actualType = if (videoUrl != null) ContentType.VIDEO
+                         else if (images.isNotEmpty()) ContentType.ALBUM
+                         else ContentType.VIDEO
+        val finalVideo = if (actualType == ContentType.ALBUM) null else videoUrl
+        return ParseResult(
+            type = actualType,
+            title = data.safeGet("title") ?: data.safeGet("desc") ?: "",
+            desc = data.safeGet("desc"),
+            cover = data.safeGet("cover"),
+            author = author,
+            videoUrl = finalVideo,
+            videoUrls = if (videoUrl != null) listOf(videoUrl) else emptyList(),
+            images = images,
+            music = null,
+            statistics = null,
+            platform = Platform.OTHER,
+            imageCount = images.size
+        )
     }
 
     suspend fun parseDoubao(url: String): ParseResult = withContext(Dispatchers.IO) {
@@ -783,114 +952,8 @@ object DouyinApi {
         return result
     }
 
-    private fun parseXinyeResponse(json: JsonObject, sourceUrl: String): ParseResult {
-        val data = json.safeGetObject("data") ?: throw Exception("返回数据格式错误")
-        AppLogger.d(TAG, "新野API响应 data 键: ${data.keySet().joinToString(", ")}")
-        AppLogger.d(TAG, "新野API响应 data JSON片段: ${data.toString().take(500)}")
-
-        val additionalData = data.safeGetArray("additional_data")
-        val firstAdditional = if (additionalData != null && additionalData.size() > 0) {
-            try { additionalData.get(0).asJsonObject } catch (_: Exception) { null }
-        } else null
-        AppLogger.d(TAG, "新野API additional_data: ${if (firstAdditional != null) "存在(键: ${firstAdditional.keySet().joinToString(", ")})" else "不存在"}")
-
-        val nickname = firstAdditional?.safeGet("nickname")
-            ?: data.safeGet("nickname")
-            ?: extractAuthorName(data)
-
-        val avatar = firstAdditional?.safeGet("url")
-            ?: data.safeGet("avatar")
-            ?: extractAuthorAvatar(data)
-
-        val title = firstAdditional?.safeGet("desc")
-            ?: data.safeGet("title")
-            ?: data.safeGet("desc")
-            ?: ""
-
-        val author = AuthorInfo(
-            nickname = nickname,
-            avatar = avatar,
-            uniqueId = firstAdditional?.safeGet("uid") ?: data.safeGet("uid") ?: data.safeGet("unique_id"),
-            followerCount = (firstAdditional?.safeGet("follower_count") ?: data.safeGet("follower_count"))?.toLongOrNull(),
-            totalFavorited = (firstAdditional?.safeGet("total_favorited") ?: data.safeGet("total_favorited"))?.toLongOrNull()
-        )
-        AppLogger.d(TAG, "新野API解析到作者: ${author.nickname}, 头像: ${author.avatar != null}")
-
-        val videoUrl = extractValidVideoUrl(data, sourceUrl)
-        AppLogger.d(TAG, "新野API extractValidVideoUrl结果: ${videoUrl != null}, 值: ${videoUrl?.take(80) ?: "null"}")
-
-        val images = extractImagesFlexible(data)
-        AppLogger.d(TAG, "新野API解析到图片: ${images.size} 张")
-
-        val actualType = if (images.isNotEmpty()) ContentType.ALBUM else ContentType.VIDEO
-        val finalVideoUrl = if (actualType == ContentType.ALBUM) null else videoUrl
-
-        val result = ParseResult(
-            type = actualType,
-            title = title,
-            desc = firstAdditional?.safeGet("desc") ?: data.safeGet("desc"),
-            cover = firstAdditional?.safeGet("cover") ?: data.safeGet("cover"),
-            author = author,
-            videoUrl = finalVideoUrl,
-            videoUrls = emptyList(),
-            images = images,
-            music = null,
-            statistics = null,
-            platform = Platform.DOUYIN,
-            imageCount = images.size
-        )
-        logParseResult("新野API(专属)", result)
-        return result
-    }
-
-    private fun parseYuanmengResponse(json: JsonObject, sourceUrl: String): ParseResult {
-        val data = json.safeGetObject("data") ?: throw Exception("返回数据格式错误")
-        AppLogger.d(TAG, "远梦API响应 data 键: ${data.keySet().joinToString(", ")}")
-        AppLogger.d(TAG, "远梦API响应 data JSON片段: ${data.toString().take(500)}")
-
-        val nickname = data.safeGet("nickname")
-            ?: extractAuthorName(data)
-
-        val title = data.safeGet("desc")
-            ?: data.safeGet("title")
-            ?: ""
-
-        val author = AuthorInfo(
-            nickname = nickname,
-            avatar = extractAuthorAvatar(data),
-            uniqueId = data.safeGet("uid") ?: data.safeGet("unique_id"),
-            followerCount = data.safeGet("follower_count")?.toLongOrNull(),
-            totalFavorited = data.safeGet("total_favorited")?.toLongOrNull()
-        )
-        AppLogger.d(TAG, "远梦API解析到作者: ${author.nickname}")
-
-        val videoUrl = extractValidVideoUrl(data, sourceUrl)
-        AppLogger.d(TAG, "远梦API extractValidVideoUrl结果: ${videoUrl != null}, 值: ${videoUrl?.take(80) ?: "null"}")
-
-        val images = extractImagesFlexible(data)
-        AppLogger.d(TAG, "远梦API解析到图片: ${images.size} 张")
-
-        val actualType = if (images.isNotEmpty()) ContentType.ALBUM else ContentType.VIDEO
-        val finalVideoUrl = if (actualType == ContentType.ALBUM) null else videoUrl
-
-        val result = ParseResult(
-            type = actualType,
-            title = title,
-            desc = data.safeGet("desc"),
-            cover = data.safeGet("cover"),
-            author = author,
-            videoUrl = finalVideoUrl,
-            videoUrls = emptyList(),
-            images = images,
-            music = null,
-            statistics = null,
-            platform = Platform.DOUYIN,
-            imageCount = images.size
-        )
-        logParseResult("远梦API(专属)", result)
-        return result
-    }
-
+    
+    
     private fun extractStatisticsFlexible(data: JsonObject): Statistics? {
         val statsObj = data.flexObject("statistics", "stats", "counts")
         if (statsObj != null) {
@@ -1500,38 +1563,42 @@ object DouyinApi {
     }
 
     private fun parseApi1(url: String): ParseResult {
-        val apiUrl = "https://apione.apibyte.cn/api/video?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
+        val apiUrl = "https://api-new.ifphp.com/api/dyjx?key=$BUGPK_API_KEY&url=${java.net.URLEncoder.encode(url, "UTF-8")}"
         AppLogger.d(TAG, "方案一实际请求URL: $apiUrl")
-        return parseDouyinResponse(fetchJson(apiUrl, "PP视频解析"), url)
+        return parseDouyinResponse(fetchJson(apiUrl, "BugPk新系统-抖音"), url)
     }
 
     private fun parseApi2(url: String): ParseResult {
-        val apiUrl = "https://api.xhus.cn/api/douyin?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
-        AppLogger.d(TAG, "方案二实际请求URL: $apiUrl")
-        return parseDouyinResponse(fetchJson(apiUrl, "柠檬解析"), url)
+        val enc = java.net.URLEncoder.encode(url, "UTF-8")
+        val urls = listOf(
+            "https://apione.apibyte.cn/douyinparse?key=$XHS_API_KEY&url=$enc",
+            "https://apione.apibyte.cn/douyinparse?url=$enc"
+        )
+        AppLogger.d(TAG, "方案二实际请求URL(带Key): ${urls[0]}")
+        return parseDouyinResponse(fetchJsonCandidate(urls, "山海云端-抖音"), url)
     }
 
     private fun parseApi3(url: String): ParseResult {
         val apiUrl = "https://api.bugpk.com/api/douyin?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
         AppLogger.d(TAG, "方案三实际请求URL: $apiUrl")
-        return parseDouyinResponse(fetchJson(apiUrl, "初梦科技"), url)
+        return parseDouyinResponse(fetchJson(apiUrl, "BugPk旧版-抖音"), url)
     }
 
     private fun parseApi4(url: String): ParseResult {
         val apiUrl = "https://apis.jxcxin.cn/api/douyin?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
-        AppLogger.d(TAG, "方案四实际请求URL: $apiUrl")
-        return parseApiStoreResponse(fetchJson(apiUrl, "API Store"), url)
+        AppLogger.d(TAG, "方案六实际请求URL: $apiUrl")
+        return parseApiStoreResponse(fetchJson(apiUrl, "创信缝合"), url)
     }
 
     private fun parseApi5(url: String): ParseResult {
-        val apiUrl = "https://api.xinyew.cn/api/douyinjx?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
-        AppLogger.d(TAG, "方案五实际请求URL: $apiUrl")
-        return parseXinyeResponse(fetchJson(apiUrl, "新野API"), url)
+        val apiUrl = "https://api.qzqi.com/api/v1/DyVideo?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
+        AppLogger.d(TAG, "方案四实际请求URL: $apiUrl")
+        return parseDouyinResponse(fetchJson(apiUrl, "远梦API"), url)
     }
 
     private fun parseApi6(url: String): ParseResult {
-        val apiUrl = "https://api.mmp.cc/api/Jiexi?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
-        AppLogger.d(TAG, "方案六实际请求URL: $apiUrl")
-        return parseYuanmengResponse(fetchJson(apiUrl, "远梦API"), url)
+        val apiUrl = "https://api.xhus.cn/api/douyin?url=${java.net.URLEncoder.encode(url, "UTF-8")}"
+        AppLogger.d(TAG, "方案五实际请求URL: $apiUrl")
+        return parseDouyinResponse(fetchJson(apiUrl, "Star解析-抖音"), url)
     }
 }
