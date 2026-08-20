@@ -1,5 +1,13 @@
 # 聚合解析 · DouyinJieXi
 
+[![Android](https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white)](https://www.android.com)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![minSdk](https://img.shields.io/badge/minSdk-24-brightgreen)](app/build.gradle.kts)
+[![targetSdk](https://img.shields.io/badge/targetSdk-36-blue)](app/build.gradle.kts)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+**🌐 [English Readme](README.en.md) · 简体中文**
+
 > 多平台无水印解析下载 · 多源智能容灾 · 随时在线更新
 
 一款基于 **Kotlin + Jetpack Compose** 的多平台**视频/图集无水印解析与下载**工具：粘贴分享链接即可解析下载，支持抖音、快手、小红书、豆包、B 站等 20+ 平台；同时内置 QQ 音乐 / 网易云搜索、在线试听与下载。
